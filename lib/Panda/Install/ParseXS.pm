@@ -27,9 +27,9 @@ sub map_postprocess {
     $code =~ s/\t/    /g;
     #$code =~ s#^(.*)$#sprintf("%-80s%s", "$1", "/* $map->{xstype} */")#mge if $code;
     
-    if ($map->{xstype} =~ s/^(.+?)\s+:\s+([^()]+)(?:\(([^()]*)\))?$/$1/) {
+    if ($map->{xstype} =~ s/^(.+?)\s+:\s+([^() ]+)\s*(\(((?:[^()]+|(?3))*)\))?$/$1/) {
         my $parent_xstype = $2;
-        my $parent_params = $3;
+        my $parent_params = $4;
         my $parent_map = $is_output ? outmap($parent_xstype) : inmap($parent_xstype);
         die "\e[31m No parent $parent_xstype found in $type map \e[0m" unless $parent_map;
         my $parent_code = $parent_map->code;
@@ -38,11 +38,15 @@ sub map_postprocess {
             my @pairs = split /\s*,\s*/, $parent_params;
             foreach my $pair (@pairs) {
                 my ($k,$v) = split /\s*=\s*/, $pair;
+                $v //= '';
                 $parent_code = "    \${ \$p{'$k'} = '$v'; \\''; }\n$parent_code";
             }
         }
         
-        if ($is_output) {
+        if ($code =~ /TYPEMAP::SUPER\(\)\s*;/) {
+            $code =~ s/\s*TYPEMAP::SUPER\(\)\s*;/$parent_code/;
+        }
+        elsif ($is_output) {
             $code .= "\n" if $code;
             $code .= $parent_code;
         } else {
