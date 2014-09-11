@@ -76,7 +76,8 @@ sub map_postprocess {
 sub outmap { return $cur_typemaps->get_outputmap(xstype => $_[0]) || $top_typemaps->get_outputmap(xstype => $_[0]); }
 sub inmap  { return $cur_typemaps->get_inputmap(xstype => $_[0]) || $top_typemaps->get_inputmap(xstype => $_[0]); }
 
-package ExtUtils::ParseXS;
+package
+    ExtUtils::ParseXS; # hide from pause
 use strict;
 use warnings;
 
@@ -163,7 +164,8 @@ sub eval_input_typemap_code {
     return $rv;
 }
 
-package ExtUtils::Typemaps;
+package
+    ExtUtils::Typemaps; # hide from pause
 use strict;
 use warnings;
 
@@ -188,7 +190,8 @@ sub _parse {
     return $orig_parse->(@_);
 }
 
-package ExtUtils::Typemaps::OutputMap;
+package
+    ExtUtils::Typemaps::OutputMap; # hide from pause
 use strict;
 use warnings;
 
@@ -206,7 +209,8 @@ sub new {
     return $self;
 };
 
-package ExtUtils::Typemaps::InputMap;
+package
+    ExtUtils::Typemaps::InputMap; # hide from pause
 use strict;
 use warnings;
 

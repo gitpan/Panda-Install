@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-our $VERSION = '0.1.1';
+our $VERSION = '0.1.2';
 
 =head1 NAME
 
