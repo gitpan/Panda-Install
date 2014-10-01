@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-our $VERSION = '0.1.3';
+our $VERSION = '0.1.4';
 
 =head1 NAME
 
@@ -456,7 +456,8 @@ sub _string_merge {
 }
 
 {
-    package MYSOURCE;
+    package
+        MYSOURCE;
     sub postamble {
         my $self = shift;
         my %args = @_;
