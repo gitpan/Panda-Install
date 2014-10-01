@@ -1,4 +1,5 @@
-package Panda::Install::ParseXS;
+package
+    Panda::Install::ParseXS;
 use strict;
 use warnings;
 use feature 'state';
@@ -26,6 +27,7 @@ sub map_postprocess {
     $code =~ s/\s+$//;
     $code =~ s/\t/    /g;
     #$code =~ s#^(.*)$#sprintf("%-80s%s", "$1", "/* $map->{xstype} */")#mge if $code;
+    my $initcode = '';
     
     if ($map->{xstype} =~ s/^(.+?)\s+:\s+([^() ]+)\s*(\(((?:[^()]+|(?3))*)\))?$/$1/) {
         my $parent_xstype = $2;
@@ -33,13 +35,18 @@ sub map_postprocess {
         my $parent_map = $is_output ? outmap($parent_xstype) : inmap($parent_xstype);
         die "\e[31m No parent $parent_xstype found in $type map \e[0m" unless $parent_map;
         my $parent_code = $parent_map->code;
+        $initcode = $parent_map->{_init_code};
         
         if ($parent_params and $parent_code) {
             my @pairs = split /\s*,\s*/, $parent_params;
             foreach my $pair (@pairs) {
-                my ($k,$v) = split /\s*=\s*/, $pair;
+                my ($k,$v) = split /\s*=\s*/, $pair, 2;
                 $v //= '';
-                $parent_code = "    \${ \$p{'$k'} = '$v'; \\''; }\n$parent_code";
+                if (index($v, '"') == 0 and rindex($v, '"') == length($v) - 1) {
+                    substr($v, 0, 1, '');
+                    chop($v);
+                }
+                $parent_code = "    \${ \$p{'$k'} //= '$v'; \\''; }\n$parent_code";
             }
         }
         
@@ -55,21 +62,26 @@ sub map_postprocess {
             $code .= "\n$prevcode" if $prevcode;
         }
     }
+    
+    # MOVE AWAY 'INIT: ...' code. It will be used in fetch_para to insert it into the top of the function
+    while ($code =~ s/^\s*INIT:(.+)//m) {
+        my $line = $1;
+        $line =~ s/^\s+//;
+        $line =~ s/\s+$//;
+        $initcode .= "$line\n";
+    }
+        
+    $map->{_init_code} = $initcode;
         
     if ($is_output) {
         # if code has '$arg = <something>' not in first line - prevent fuckin ExtUtils::ParseXS from adding '$arg = sv_newmortal()'
         # triggered by $arg = NULL which must firstly be set by typemap itself. Move it on top if inheriting
-        #state $ppline = '    $arg = $arg; /* suppress xsubpp\'s pollution of $arg */';
-        my $found = ($code =~ s/^\s*\$arg\s*=\s*NULL\s*;\s*$//gm); # remove previous guardians;
+        #state $ppline = '    $arg = NULL; /* suppress xsubpp\'s pollution of $arg */';
+        my $found = ($code =~ s/^\s*\$arg\s*=\s*\NULL\s*;\s*$//gm); # remove previous guardians;
         $code = "    \$arg = NULL;\n$code" if $found;
         $code =~ s/\n\s*\n/\n/gm;
     }
     
-#    if ($code =~ /xs/) {
-#        warn "--------------------";
-#        warn $code;
-#        warn "--------------------";
-#    }
     $map->code($code);
 }
 
@@ -136,6 +148,22 @@ sub fetch_para {
         push @$linno, $linno->[-1]+1 for 1..2;
         $para = join("\n", @$lines);
     }
+    
+    if (my $out_ctype = $lines->[0]) {{
+        $out_ctype =~ s/^\s+//g;
+        $out_ctype =~ s/\s+$//g;
+        my $out_tmap = $self->{typemap}->get_outputmap(ctype => $out_ctype) or last;
+        my $init_code = $out_tmap->{_init_code} or last;
+        my $idx;
+        for (my $i = 2; $i < @$lines; ++$i) {
+            next unless $lines->[$i] =~ /^\s*[a-zA-Z0-9]+\s*:/;
+            $idx = $i;
+            last;
+        }
+        last unless $idx;
+        splice(@$lines, $idx, 0, $init_code);
+        splice(@$linno, $idx, 0, $linno->[0]);
+    }}
     
     return $ret;
 }

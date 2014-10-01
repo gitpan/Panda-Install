@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-our $VERSION = '0.1.2';
+our $VERSION = '0.1.3';
 
 =head1 NAME
 
@@ -709,9 +709,11 @@ Flags to build external library with.
 
 =back
 
-=head1 TYPEMAP INHERITANCE
+=head1 TYPEMAP FEATURES
 
-=head4 Output typemaps
+=head2 TYPEMAP INHERITANCE
+
+=head3 Output typemaps
 
     T_TYPE1
         mycode1;
@@ -725,7 +727,7 @@ T_TYPE2 will have mycode1 inserted after mycode2 as if it was written
         mycode2;
         mycode1;
         
-=head4 Input typemaps
+=head3 Input typemaps
 
     T_TYPE1
         mycode1;
@@ -738,6 +740,53 @@ T_TYPE2 will have mycode1 inserted before mycode2 as if it was written
     T_TYPE2
         mycode1;
         mycode2;
+
+=head3 Passing params
+
+You can pass params when inheriting typemaps. These params can be accessed in parent typemap via %p hash.
+
+    T_TYPE1
+        int $p{varname} = 150;
+        mycode1;
+        $p{expr};
+
+    T_TYPE2 : T_TYPE1(varname=myvar, expr="myvar = a + b")
+        mycode2;
+
+will result in (for input typemap)
+
+    T_TYPE2
+        int myvar = 150;
+        mycode1;
+        myvar = a + b;
+        mycode2;
+
+=head2 TYPEMAP INIT CODE
+
+In OUTPUT typemaps you can use 'INIT: expr;' expressions. These expressions later will be moved to the top of the XS function like 
+INIT: section of XS function itself. It is useful for typemaps which want to predefine some variable, so that user has a chance
+to change it. Such typemaps then use this variable in its code. For example:
+
+    TYPEMAP
+    
+    int MY_TYPE
+
+    OUTPUT
+    
+    MY_TYPE
+        INIT: int lolo = 0;
+        sv_setiv($arg, $var + lolo);
+        
+    
+    #XS
+    
+    int
+    myfunc () 
+    CODE:
+        lolo = 10;
+        RETVAL = 20; // returns 30
+    OUTPUT:
+        RETVAL;
 
 =head1 C-LIKE XS
 
