@@ -9,7 +9,7 @@ chdir 't/testmod' or die $!;
 
 my %args;
 
-%args = tune Panda::Install::makemaker_args(NAME => 'TestMod', PREPENDS => {
+%args = tune Panda::Install::makemaker_args(NAME => 'TestMod', BIN_SHARE => {
     TYPEMAPS => {'typemap.map' => '', 'src2' => '/', 'src/smap.map' => 'extra/map.map' },
     INC      => '/usr/local/libevent/include',
     INCLUDE  => {'src' => '/', 'src2' => '/'},

@@ -2,8 +2,9 @@ package Panda::Install;
 use strict;
 use warnings;
 use Exporter 'import';
+use Panda::Install::Payload;
 
-our $VERSION = '0.1.4';
+our $VERSION = '0.1.5';
 
 =head1 NAME
 
@@ -24,32 +25,6 @@ my $xsi_mask = '*.xsi';
 my $c_mask   = '*.c *.cc *.cpp *.cxx';
 my $h_mask   = '*.h *.hh *.hpp *.hxx';
 my $map_mask = '*.map';
-
-sub data_dir {
-    my $module = pop;
-    $module =~ s/::/\//g;
-    
-    # first try search in loaded module's dir
-    if (my $path = $INC{"$module.pm"}) {
-        $path =~ s/\.pm$//;
-        my $pldir = "$path.x";
-        return $pldir if -d $pldir;
-    }
-    
-    foreach my $inc (@INC) {
-        my $pldir = "$inc/$module.x";
-        return $pldir if -d $pldir;
-    }
-    
-    return undef;
-}
-
-sub payload_dir {
-    my $dir = data_dir(@_) or return undef;
-    my $pldir = "$dir/payload";
-    return $pldir if -d $pldir;
-    return undef;
-}
 
 sub write_makefile {
     _require_makemaker();
@@ -84,7 +59,7 @@ sub makemaker_args {
 
     $params{CONFIGURE_REQUIRES} ||= {};
     $params{CONFIGURE_REQUIRES}{'ExtUtils::MakeMaker'} ||= '6.76';
-    $params{CONFIGURE_REQUIRES}{'Panda::Install'}      ||= 0;
+    $params{CONFIGURE_REQUIRES}{'Panda::Install'}      ||= $VERSION;
     
     $params{BUILD_REQUIRES} ||= {};
     $params{BUILD_REQUIRES}{'ExtUtils::MakeMaker'} ||= '6.76';
@@ -95,10 +70,13 @@ sub makemaker_args {
     $params{TEST_REQUIRES}{'Test::More'}   ||= 0;
     $params{TEST_REQUIRES}{'Test::Deep'}   ||= 0;
     
+    $params{PREREQ_PM} ||= {};
+    $params{PREREQ_PM}{'Panda::Install'} ||= $VERSION; # needed at runtime because it has payload_dir and xsloader
+    
     $params{clean} ||= {};
     $params{clean}{FILES} ||= '';
     
-    delete $params{PREPENDS} if $params{PREPENDS} and !%{$params{PREPENDS}};
+    delete $params{BIN_SHARE} if $params{BIN_SHARE} and !%{$params{BIN_SHARE}};
     
     {
         my $val = $params{SRC};
@@ -113,6 +91,9 @@ sub makemaker_args {
     
     $params{TYPEMAPS} = [$params{TYPEMAPS}] if $params{TYPEMAPS} and ref($params{TYPEMAPS}) ne 'ARRAY';
     
+    my $module_info = Panda::Install::Payload::module_info($params{NAME}) || {};
+    $params{MODULE_INFO} = {BIN_DEPENDENT => $module_info->{BIN_DEPENDENT}};
+    
     process_XS(\%params);
     process_PM(\%params);
     process_C(\%params);
@@ -121,8 +102,10 @@ sub makemaker_args {
     process_XSI(\%params);
     process_CLIB(\%params);
     process_PAYLOAD(\%params);
-    process_DEPENDS(\%params);
-    process_PREPENDS(\%params);
+    process_BIN_DEPS(\%params);
+    process_BIN_SHARE(\%params);
+    attach_BIN_DEPENDENT(\%params);
+    warn_BIN_DEPENDENT(\%params);
 
     if (my $use_cpp = delete $params{CPLUS}) {
         $params{CC} ||= 'c++';
@@ -135,6 +118,8 @@ sub makemaker_args {
 
     delete $params{$_} for qw/SRC/;
     $params{OBJECT} = '$(O_FILES)' unless defined $params{OBJECT};
+    
+    delete $params{MODULE_INFO};
 
     return %params;
 }
@@ -242,32 +227,29 @@ sub process_PAYLOAD {
     _install($params, $payload, 'payload');
 }
 
-sub process_DEPENDS {
+sub process_BIN_DEPS {
     my $params = shift;
-    my $depends = delete $params->{DEPENDS} or return;
-    $depends = [$depends] unless ref($depends) eq 'ARRAY';
-    _apply_DEPENDS($params, $_, {}) for @$depends;
+    my $bin_deps = delete $params->{BIN_DEPS} or return;
+    $bin_deps = [$bin_deps] unless ref($bin_deps) eq 'ARRAY';
+    _apply_BIN_DEPS($params, $_, {}) for @$bin_deps;
 }
 
-sub _apply_DEPENDS {
+sub _apply_BIN_DEPS {
     my ($params, $module, $seen) = @_;
-    my $stop_prepending;
-    $stop_prepending = 1 if $module =~ s/^-//;
+    my $stop_sharing;
+    $stop_sharing = 1 if $module =~ s/^-//;
     
     return if $seen->{$module}++;
-    $params->{CONFIGURE_REQUIRES}{$module} ||= 0;
-
-    my $mfile = $module;
-    $mfile =~ s#::#/#g;
-    $mfile .= '.x/info';
-    my $info = require $mfile or next;
     
-    my $extra_dir = $INC{$mfile};
-    $extra_dir =~ s#/info$##;
+    my $installed_version = Panda::Install::Payload::module_version($module);
+    $params->{CONFIGURE_REQUIRES}{$module}  ||= $installed_version;
+    $params->{PREREQ_PM}{$module}           ||= $installed_version;
+    $params->{MODULE_INFO}{BIN_DEPS}{$module} = $installed_version;
+
+    my $info = Panda::Install::Payload::module_info($module);
     
     if ($info->{INCLUDE}) {
-        my $incdir = "$extra_dir/i";
-        $incdir =~ s#[/\\]{2,}#/#g;
+        my $incdir = Panda::Install::Payload::include_dir($module);
         _string_merge($params->{INC}, "-I$incdir");
     }
     
@@ -277,8 +259,9 @@ sub _apply_DEPENDS {
     _string_merge($params->{XSOPT},   $info->{XSOPT});
     
     if (my $typemaps = $info->{TYPEMAPS}) {
+        my $tm_dir = Panda::Install::Payload::typemap_dir($module);
         foreach my $typemap (reverse @$typemaps) {
-            my $tmfile = "$extra_dir/tm/$typemap";
+            my $tmfile = "$tm_dir/$typemap";
             $tmfile =~ s#[/\\]{2,}#/#g;
             unshift @{$params->{TYPEMAPS} ||= []}, $tmfile;
         }
@@ -303,50 +286,96 @@ sub _apply_DEPENDS {
     }}
     
     if (my $passthrough = $info->{PASSTHROUGH}) {
-        _apply_DEPENDS($params, $_) for @$passthrough;
+        _apply_BIN_DEPS($params, $_) for @$passthrough;
     }
     
     $params->{CPLUS} = 1 if $info->{CPLUS};
     
-    if (my $prepends = $params->{PREPENDS} and !$stop_prepending) {
-        $prepends->{PASSTHROUGH} ||= [];
-        push @{$prepends->{PASSTHROUGH}}, $module;
+    if (my $bin_share = $params->{BIN_SHARE} and !$stop_sharing) {
+        push @{$bin_share->{PASSTHROUGH} ||= []}, $module;
     }
 }
 
-sub process_PREPENDS {
+sub process_BIN_SHARE {
     my $params = shift;
-    my $prepends = delete $params->{PREPENDS} or return;
+    my $bin_share = delete $params->{BIN_SHARE} or return;
     
-    my $typemaps = delete($prepends->{TYPEMAPS}) || {};
+    my $typemaps = delete($bin_share->{TYPEMAPS}) || {};
     _process_map($typemaps, $map_mask);
     _install($params, $typemaps, 'tm');
-    $prepends->{TYPEMAPS} = [values %$typemaps] if scalar keys %$typemaps;
+    $bin_share->{TYPEMAPS} = [values %$typemaps] if scalar keys %$typemaps;
     
-    my $include = delete($prepends->{INCLUDE}) || {};
+    my $include = delete($bin_share->{INCLUDE}) || {};
     _process_map($include, $h_mask);
     _install($params, $include, 'i');
-    $prepends->{INCLUDE} = 1 if scalar(keys %$include);
+    $bin_share->{INCLUDE} = 1 if scalar(keys %$include);
     
-    $prepends->{LIBS} = [$prepends->{LIBS}] if $prepends->{LIBS} and ref($prepends->{LIBS}) ne 'ARRAY';
-    $prepends->{PASSTHROUGH} = [$prepends->{PASSTHROUGH}] if $prepends->{PASSTHROUGH} and ref($prepends->{PASSTHROUGH}) ne 'ARRAY';
+    $bin_share->{LIBS} = [$bin_share->{LIBS}] if $bin_share->{LIBS} and ref($bin_share->{LIBS}) ne 'ARRAY';
+    $bin_share->{PASSTHROUGH} = [$bin_share->{PASSTHROUGH}] if $bin_share->{PASSTHROUGH} and ref($bin_share->{PASSTHROUGH}) ne 'ARRAY';
     
-    return unless %$prepends;
+    if (my $list = $params->{MODULE_INFO}{BIN_DEPENDENT}) {
+        $bin_share->{BIN_DEPENDENT} = $list if @$list;
+    }
     
-    require Data::Dumper;
-    Data::Dumper->import('Dumper');
+    if (my $vinfo = $params->{MODULE_INFO}{BIN_DEPS}) {
+        $bin_share->{BIN_DEPS} = $vinfo if %$vinfo;
+    }
+    
+    return unless %$bin_share;
     
     # generate info file
     mkdir 'blib';
-    local $Data::Dumper::Terse = 1;
-    my $content = Dumper($prepends);
     my $infopath = 'blib/info';
-    open my $fh, '>', $infopath or die "cannot open $infopath: $!";
-    print $fh $content;
-    close $fh;
+    _module_info_write($infopath, $bin_share);
     
     my $pm = $params->{PM} ||= {};
     $pm->{$infopath} = '$(INST_ARCHLIB)/$(FULLEXT).x/info';
+}
+
+sub attach_BIN_DEPENDENT {
+    my $params = shift;
+    my @deps = keys %{$params->{MODULE_INFO}{BIN_DEPS} || {}};
+    return unless @deps;
+    
+    $params->{postamble}{sync_bin_deps} =
+        "sync_bin_deps:\n".
+        "\t\$(PERL) -MPanda::Install -e 'Panda::Install::cmd_sync_bin_deps()' $params->{NAME} @deps\n".
+        "install :: sync_bin_deps";
+}
+
+sub warn_BIN_DEPENDENT {
+    my $params = shift;
+    return unless $params->{VERSION_FROM};
+    my $module = $params->{NAME};
+    my $list = $params->{MODULE_INFO}{BIN_DEPENDENT} or return;
+    return unless @$list;
+    my $installed_version = Panda::Install::Payload::module_version($module) or return;
+    my $mm = bless {}, 'MM';
+    my $new_version = $mm->parse_version($params->{VERSION_FROM}) or return;
+    return if $installed_version eq $new_version;
+    warn << "EOF";
+******************************************************************************
+Panda::Install: There are XS modules that binary depend on current XS module $module.
+They were built with currently installed $module version $installed_version.
+If you install $module version $new_version, you will have to reinstall all XS modules that binary depend on it:
+cpanm -f @$list
+******************************************************************************
+EOF
+}
+
+sub cmd_sync_bin_deps {
+    my $myself = shift @ARGV;
+    my @modules = @ARGV;
+    foreach my $module (@modules) {
+        my $info = Panda::Install::Payload::module_info($module) or next;
+        my $dependent = $info->{BIN_DEPENDENT} || [];
+        my %tmp = map {$_ => 1} grep {$_ ne $module} @$dependent;
+        $tmp{$myself} = 1;
+        $info->{BIN_DEPENDENT} = [sort keys %tmp];
+        delete $info->{BIN_DEPENDENT} unless @{$info->{BIN_DEPENDENT}};
+        my $file = Panda::Install::Payload::module_info_file($module);
+        _module_info_write($file, $info);
+    }
 }
 
 sub _install {
@@ -472,6 +501,28 @@ sub _require_makemaker {
     }
 }
 
+sub _module_info_write {
+    my ($file, $info) = @_;
+    require Data::Dumper;
+    local $Data::Dumper::Terse = 1;
+    local $Data::Dumper::Indent = 0;
+    my $content = Data::Dumper::Dumper($info);
+    my $restore_mode;
+    if (-e $file) { # make sure we have permissions to write, because perl installs files with 444 perms
+        my $mode = (stat $file)[2];
+        unless ($mode & 0200) { # if not, temporary enable write permissions
+            $restore_mode = $mode;
+            $mode |= 0200;
+            chmod $mode, $file;
+        }
+    }
+    open my $fh, '>', $file or die "Cannot open $file for writing: $!";
+    print $fh $content;
+    close $fh;
+    
+    chmod $restore_mode, $file if $restore_mode; # restore old perms if we changed it
+}
+
 =head1 DESCRIPTION
 
 Panda::Install makes it much easier to write MakeMaker's makefiles especially for XS modules.
@@ -502,8 +553,8 @@ Also it supports typemap inheritance and C-like XS synopsis.
             'abc.dat'    => '/mydir/bca.dat',
             'payloaddir' => '/',
         },
-        DEPENDS => ['XS::Module1', 'XS::Module2'],
-        PREPENDS => {
+        BIN_DEPS  => ['XS::Module1', 'XS::Module2'],
+        BIN_SHARE => {
             # modules that depend on My::XS will compile with this INC, LIBS, etc set.
             TYPEMAPS    => {'typemap1.map' => '/typemap.map'},
             INC         => '-I/usr/local/libevent/include', 
@@ -511,7 +562,6 @@ Also it supports typemap inheritance and C-like XS synopsis.
             LIBS        => '-levent',
             DEFINE      => '-DHELLO_FROM_MYXS',
             CCFLAGS     => 'something',
-            PASSTHROUGH => 'XS::Module1',
         },
         postamble => 'mytarget: blah-blah; echo "hello"',
         CLIB => [{
@@ -521,6 +571,16 @@ Also it supports typemap inheritance and C-like XS synopsis.
             FLAGS  => 'CFLAGS="-fPIC -O2"',
         }],
     );
+    
+=head LOADING XS MODULE SYNOPSIS
+
+    package MyXSModule;
+    use Panda::XSLoader;
+    
+    our $VERSION = '1.0.0';
+    Panda::XSLoader::load(); # same as Panda::XSLoader::load('MyXSModule', $VERSION, 0x01);
+    
+see L<Panda::XSLoader>
     
 =head1 TYPEMAP INHERITANCE SYNOPSIS
 
@@ -541,6 +601,12 @@ Also it supports typemap inheritance and C-like XS synopsis.
         xPUSHi(1);
         xPUSHi(2);
     }
+    
+=head1 GETTING PAYLOAD SYNOPSIS
+
+    my $payload_dir = Panda::Install::Payload::payload_dir('My::Module');
+    
+see L<Panda::Install::Payload>
 
 =head1 FUNCTIONS
 
@@ -551,10 +617,6 @@ Same as WriteMakefile(makemaker_args(%params))
 =head4 makemaker_args(%params)
 
 Processes %params, does all the neccessary job and returns final parameters for passing to MakeMaker's WriteMakefile.
-
-=head4 payload_dir($module)
-
-Returns directory where the payload of module $module is located or undef if $module didn't install any payload.
 
 =head2 PARAMETERS
 
@@ -635,58 +697,58 @@ Examples (given that $payload is a directory where payload is installed and $dis
     'mydir'    => 'a/b/c', # $dist/mydir/*  => $payload/a/b/c/*
     'mydir'    => '/',     # $dist/mydir/*  => $payload/*
 
-=item DEPENDS
+=item BIN_DEPS
 
-List of modules current module depends on. That means all that those modules specified in PREPENDS section will be applied
+List of modules current module binary depends on. That means all that those modules specified in BIN_SHARE section will be applied
 while building current module. It also adds those modules to CONFIGURE_REQUIRES section.
 
-Also if your module has PREPENDS section then all modules in DEPENDS goes to PREPENDS/PASSTHROUGH unless module name is prefixed
+Also if your module has BIN_SHARE section then all modules in BIN_DEPS goes to BIN_SHARE/PASSTHROUGH unless module name is prefixed
 with '-' (minus).
 
 Examples:
 
-    DEPENDS => 'Module1'
-    DEPENDS => ['Module1', '-Module2']
+    BIN_DEPS => 'Module1'
+    BIN_DEPS => ['Module1', '-Module2']
 
-=item PREPENDS
+=item BIN_SHARE
 
 In this section you put values that you want to be applied to any module which specified your module as a dependency.
 
-=item PREPENDS/TYPEMAPS
+=item BIN_SHARE/TYPEMAPS
 
 Installs specified typemaps and also adds it to the list of typemaps when building descendant modules.
 
 Receives HASHREF, format is the same as for PAYLOAD, the only difference is that it scans folders for *.map files only.
 
-=item PREPENDS/INC
+=item BIN_SHARE/INC
 
 Adds include file dirs to INC when building descendant modules.
 
-=item PREPENDS/INCLUDE
+=item BIN_SHARE/INCLUDE
 
 Installs specified include files/dirs into module's installation include directory and adds that directory to INC
 when building descendant modules.
 
-=item PREPENDS/LIBS
+=item BIN_SHARE/LIBS
 
 Added to LIBS when building descendant modules.
 
-=item PREPENDS/DEFINE
+=item BIN_SHARE/DEFINE
 
 Added to DEFINE when building descendant modules.
 
-=item PREPENDS/CCFLAGS
+=item BIN_SHARE/CCFLAGS
 
 Added to CCFLAGS when building descendant modules.
 
-=item PREPENDS/XSOPT
+=item BIN_SHARE/XSOPT
 
 Added to XSOPT when building descendant modules.
 
-=item PREPENDS/PASSTHROUGH
+=item BIN_SHARE/PASSTHROUGH
 
-Merge 'PREPENDS' of this module with 'PREPENDS' of specified modules. Everything gets concatenated (strings, arrays, etc) while merging.
-You don't need to manually manage this setting as it's managed automatically (see DEPENDS section).
+Merge 'BIN_SHARE' of this module with 'BIN_SHARE' of specified modules. Everything gets concatenated (strings, arrays, etc) while merging.
+You don't need to manually manage this setting as it's managed automatically (see BIN_DEPS section).
 
 =item CLIB
 
