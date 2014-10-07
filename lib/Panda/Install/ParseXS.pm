@@ -5,6 +5,7 @@ use warnings;
 use feature 'state';
 use ExtUtils::ParseXS;
 use ExtUtils::ParseXS::Eval;
+use ExtUtils::ParseXS::Utilities;
 use ExtUtils::Typemaps;
 use ExtUtils::Typemaps::InputMap;
 use ExtUtils::Typemaps::OutputMap;
@@ -256,6 +257,19 @@ sub new {
     return $self;
 };
 
+package
+    ExtUtils::ParseXS::Utilities; # hide from pause
+use strict;
+use warnings;
+no warnings 'redefine';
+
+# remove ugly default behaviour, it always overrides typemaps in xsubpp's command line
+sub standard_typemap_locations {
+    my $inc = shift;
+    my @ret;
+    push @ret , 'typemap' if -e 'typemap';
+    return @ret;
+}
 
 =head1 AUTHOR
 

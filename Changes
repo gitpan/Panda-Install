@@ -1,3 +1,5 @@
+0.1.6    07.10.2014
+           - make it possible for xsubpp's typemaps in command-line args to override ExtUtil's default typemap 
 0.1.5    04.10.2014
            - Add support for automatic binary incompability detection between XS modules
 0.1.4    02.10.2014
