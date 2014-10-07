@@ -4,7 +4,7 @@ use warnings;
 use Exporter 'import';
 use Panda::Install::Payload;
 
-our $VERSION = '0.1.6';
+our $VERSION = '0.1.7';
 
 =head1 NAME
 
@@ -12,7 +12,7 @@ Panda::Install - ExtUtils::MakeMaker based module installer for XS modules.
 
 =cut
 
-our @EXPORT_OK = qw/payload_dir write_makefile makemaker_args/;
+our @EXPORT_OK = qw/write_makefile makemaker_args/;
 our @EXPORT;
 
 if ($0 =~ /Makefile.PL$/) {
@@ -683,7 +683,7 @@ Is set to 5.10.0 if you don't provide it.
 =item PAYLOAD
 
 Implements L<File::ShareDir> functionality. Specified files are installed together with module and can later be accessed
-at runtime by the module itself or by other modules (via Panda::Install::payload_dir()).
+at runtime by the module itself or by other modules (via L<Panda::Install::Payload>'s payload_dir()).
 
 Value is a HASHREF where key is a file or directory path relative to module's dist dir and value is relative to payload's
 installation dir. If key is a directory then all content of that directory is installed to the destination path. If value
@@ -700,7 +700,7 @@ Examples (given that $payload is a directory where payload is installed and $dis
 =item BIN_DEPS
 
 List of modules current module binary depends on. That means all that those modules specified in BIN_SHARE section will be applied
-while building current module. It also adds those modules to CONFIGURE_REQUIRES section.
+while building current module. It also adds those modules to CONFIGURE_REQUIRES and PREREQ_PM sections.
 
 Also if your module has BIN_SHARE section then all modules in BIN_DEPS goes to BIN_SHARE/PASSTHROUGH unless module name is prefixed
 with '-' (minus).
@@ -728,6 +728,8 @@ Adds include file dirs to INC when building descendant modules.
 
 Installs specified include files/dirs into module's installation include directory and adds that directory to INC
 when building descendant modules.
+
+Receives HASHREF, format is the same as for PAYLOAD, the only difference is that it scans folders for header files only.
 
 =item BIN_SHARE/LIBS
 
