@@ -28,6 +28,7 @@ sub map_postprocess {
     $code =~ s/\s+$//;
     $code =~ s/\t/    /g;
     #$code =~ s#^(.*)$#sprintf("%-80s%s", "$1", "/* $map->{xstype} */")#mge if $code;
+    my @attrs = qw/PREVENT_DEFAULT_DELETE_ON_EMPTY_DESTROY/;
     my $initcode = '';
     
     if ($map->{xstype} =~ s/^(.+?)\s+:\s+([^() ]+)\s*(\(((?:[^()]+|(?3))*)\))?$/$1/) {
@@ -37,6 +38,7 @@ sub map_postprocess {
         die "\e[31m No parent $parent_xstype found in $type map \e[0m" unless $parent_map;
         my $parent_code = $parent_map->code;
         $initcode = $parent_map->{_init_code};
+        $map->{_attrs}{$_} = $parent_map->{_attrs}{$_} for @attrs;
         
         if ($parent_params and $parent_code) {
             my @pairs = split /\s*,\s*/, $parent_params;
@@ -73,7 +75,13 @@ sub map_postprocess {
     }
         
     $map->{_init_code} = $initcode;
-        
+    
+    foreach my $attr (@attrs) {
+        next unless $code =~ s/^\s*\@$attr\s*(?:=\s*(.+))?$//mg;
+        $map->{_attrs}{$attr} = $1 // 1;
+        $map->{_attrs}{$attr} =~ s/\s+$//;
+    }
+    
     if ($is_output) {
         # if code has '$arg = <something>' not in first line - prevent fuckin ExtUtils::ParseXS from adding '$arg = sv_newmortal()'
         # triggered by $arg = NULL which must firstly be set by typemap itself. Move it on top if inheriting
@@ -114,11 +122,54 @@ sub fetch_para {
         $lines->[0] = "$1:";
         if ($lines->[-1] =~ /^\}/) { pop @$lines; pop @$linno; }
     }
-
+    
     my $re_alias = qr/ALIAS\s*\(([^()]+)\)/;
     if ($lines->[0] and $lines->[0] =~ /^(.+?)\s+([^\s()]+\s*(\((?:[^()]+|(?3))*\)))\s*(?::\s*(?:$re_alias)?)?\s*\{?/) {
         my ($type, $sig, $alias) = ($1, $2, $4);
+        my $remove_closing;
+        
+        if ((my $idx = index($lines->[0], '{')) > 0) { # move following text on next line
+            $remove_closing = 1;
+            my $content = substr($lines->[0], $idx);
+            if ($content !~ /^\{\s*$/) {
+                $content =~ s/^\{//;
+                splice(@$lines, 1, 0, $content);
+                splice(@$linno, 1, 0, $linno->[0]);
+            }
+        } elsif ($lines->[1] and $lines->[1] =~ s/^\s*\{//) { # '{' on next line
+            $remove_closing = 1;
+            if ($lines->[1] !~ /\S/) { # nothing remains, delete entire line
+                splice(@$lines, 1, 1);
+                splice(@$linno, 1, 1);
+            }
+        }
+
+        if ($remove_closing) {
+            $lines->[-1] =~ s/}\s*;?\s*$//;
+            if ($lines->[-1] !~ /\S/) { pop @$lines; pop @$linno; }
+            
+            if (!$lines->[1] or $lines->[1] !~ /\S/) { # no code remains, but body was present ({}), add empty code to prevent default behaviour
+                splice(@$lines, 1, 0, ' ');
+                splice(@$linno, 1, 0, $linno->[0]);
+            }
+        }
+        
         $lines->[0] = $type;
+        
+        if (!$lines->[1]) {{ # empty sub
+            $DB::single=1;
+            my ($class, $func, $var);
+            if ($sig =~ /^([^:]+)::([a-zA-Z0-9_\$]+)/) {
+                ($class, $func, $var) = ("$1*", $2, 'THIS');
+            } elsif ($sig =~ /^([a-zA-Z0-9_\$]+)\s*\(\s*([a-zA-Z0-9_\$*]+)\s+\*?([a-zA-Z0-9_\$]+)\)/) {
+                ($class, $func, $var) = ($2, $1, $3);
+            } else { last }
+            my $in_tmap = $self->{typemap}->get_inputmap(ctype => $class) or last;
+            if ($func eq 'DESTROY' and $var eq 'THIS' and $in_tmap->{_attrs}{PREVENT_DEFAULT_DELETE_ON_EMPTY_DESTROY}) {
+                splice(@$lines, 1, 0, ' ');
+                splice(@$linno, 1, 0, $linno->[0]);
+            }
+        }}
         
         if ($lines->[1] and $lines->[1] !~ /^[A-Z]+\s*:/) {
             splice(@$lines, 1, 0, $type =~ /^void(\s|$)/ ? 'PPCODE:' : 'CODE:');
@@ -139,7 +190,6 @@ sub fetch_para {
         
         splice(@$lines, 1, 0, $sig);
         splice(@$linno, 1, 0, $linno->[0]);
-        if ($lines->[-1] =~ /^\}/) { pop @$lines; pop @$linno; }
     }
 
     my $para = join("\n", @$lines);
@@ -173,6 +223,7 @@ sub eval_output_typemap_code {
     my ($self, $code, $other) = @_;
     my ($Package, $ALIAS, $func_name, $Full_func_name, $pname) = @{$self}{qw(Package ALIAS func_name Full_func_name pname)};
     my ($var, $type, $ntype, $subtype, $arg) = @{$other}{qw(var type ntype subtype arg)};
+    my $type_deref = substr($type, -1, 1) eq '*' ? substr($type, 0, length($type)-1) : $type;
     my %p;
   
     no warnings 'uninitialized';
@@ -185,6 +236,7 @@ sub eval_input_typemap_code {
     my ($self, $code, $other) = @_;
     my ($Package, $ALIAS, $func_name, $Full_func_name, $pname) = @{$self}{qw(Package ALIAS func_name Full_func_name pname)};
     my ($var, $type, $num, $init, $printed_name, $arg, $ntype, $argoff, $subtype) = @{$other}{qw(var type num init printed_name arg ntype argoff subtype)};
+    my $type_deref = substr($type, -1, 1) eq '*' ? substr($type, 0, length($type)-1) : $type;
     my %p;
 
     no warnings 'uninitialized';

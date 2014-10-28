@@ -4,7 +4,7 @@ use warnings;
 use Exporter 'import';
 use Panda::Install::Payload;
 
-our $VERSION = '0.1.8';
+our $VERSION = '0.1.9';
 
 =head1 NAME
 

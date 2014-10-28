@@ -1,3 +1,5 @@
+0.1.9    28.20.2014
+           - improved support for C-like XS functions. added PREVENT_DEFAULT_DELETE_ON_EMPTY_DESTROY param and $type_deref var for typemaps
 0.1.8    08.10.2014
            - bugfix for XS module version detection while building Makefile
 0.1.7    08.10.2014
