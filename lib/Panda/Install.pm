@@ -4,7 +4,7 @@ use warnings;
 use Exporter 'import';
 use Panda::Install::Payload;
 
-our $VERSION = '0.1.9';
+our $VERSION = '0.2.0';
 
 =head1 NAME
 
@@ -608,6 +608,31 @@ see L<Panda::XSLoader>
     
 see L<Panda::Install::Payload>
 
+=head1 TYPEMAP CAST SYNOPSIS
+
+    bool
+    filter (AV* users, const char* what)
+    CODE:
+        for (int i = 0; i <= av_len(users); ++i) {
+            User* user = typemap_incast<User*>(av_fetch(users, i, 0));
+            if (...) XSRETURN_TRUE;
+        }
+        XSRETURN_FALSE;
+    OUTPUT:
+        RETVAL
+    
+    
+    AV*
+    MyStorage::get_sites ()
+    CODE:
+        RETVAL = newAV();
+        for (int i = 0; i < THIS->urls.length(); ++i) {
+            SV* uri_perl_obj = typemap_outcast<URI*, const char* CLASS>(THIS->urls[i], "My::URI");
+            av_push(RETVAL, uri_perl_obj);
+        }
+    OUTPUT:
+        RETVAL
+
 =head1 FUNCTIONS
 
 =head4 write_makefile(%params)
@@ -853,6 +878,32 @@ to change it. Such typemaps then use this variable in its code. For example:
     OUTPUT:
         RETVAL;
 
+=head2 TYPEMAP CAST
+
+Sometimes the type of data you receive or return depends on something and therefore you cannot use certain input or output typemap.
+To help you dealing with this, there are typemap input and output cast operators (for XS code).
+
+=head4 template <class T> T typemap_incast (SV* input)
+
+Does what INPUT typemap "T" would do. Returns T.
+
+Can ONLY be used inside XS functions.
+
+=head4 template <class T> SV* typemap_outcast (T output)
+
+Does what OUTPUT typemap "T" would do. Returns SV*.
+
+Can ONLY be used inside XS functions.
+
+=head4 template <class T, arg def1, arg def2, ...> SV* typemap_outcast (T output, arg1, arg2, ...)
+
+This is an extended version of typemap_outcast, which is useful if typemap "T" requires additional variables to be predefined.
+For example, typemaps which create objects, often require "const char* CLASS = ..." variable to be defined.
+In this case you need to define these variables right after typemap type and pass all of them as a parameters to typemap cast
+function:
+
+    ... = typemap_outcast<MyClass*, const char* CLASS, bool do_checks, SV* extra>(new MyClass(), "My::Class", true, myextra);
+
 =head1 C-LIKE XS
 
 If you're using Panda::Install then all of your XS files support C-like XS. It means that code
@@ -886,6 +937,16 @@ is replaced with code
         xPUSHi(1);
         xPUSHi(2);
     
+Note that writing
+
+    int myfunc (int a)
+    
+will result in default ParseXS behaviour (calling C function myfunc(a) and returning its result). That's because it has no body.
+
+However this function has a body (empty) and therefore prevents default behaviour
+
+    int myfunc (int a) {}
+
 =head1 AUTHOR
 
 Pronin Oleg <syber@crazypanda.ru>, Crazy Panda, CP Decision LTD
