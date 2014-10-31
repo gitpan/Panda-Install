@@ -4,7 +4,7 @@ use warnings;
 use Exporter 'import';
 use Panda::Install::Payload;
 
-our $VERSION = '0.2.0';
+our $VERSION = '0.2.1';
 
 =head1 NAME
 
@@ -572,7 +572,7 @@ Also it supports typemap inheritance and C-like XS synopsis.
         }],
     );
     
-=head LOADING XS MODULE SYNOPSIS
+=head1 LOADING XS MODULE SYNOPSIS
 
     package MyXSModule;
     use Panda::XSLoader;
